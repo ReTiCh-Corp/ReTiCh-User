@@ -26,17 +26,26 @@ var allowedMIMETypes = map[string]string{
 	"image/webp": ".webp",
 }
 
+// userRepository définit les opérations en base attendues par le handler.
+// Utiliser une interface permet d'injecter un mock dans les tests sans base de données réelle.
+type userRepository interface {
+	GetByID(id string) (*model.Profile, error)
+	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
+	UpdateAvatarURL(id, avatarURL string) (*model.Profile, error)
+}
+
 // UserHandler regroupe tous les handlers HTTP liés aux utilisateurs.
 // uploadsDir : chemin du dossier où sont stockés les avatars sur disque.
 // baseURL    : URL publique de base pour construire les liens vers les avatars.
 type UserHandler struct {
-	repo       *repository.UserRepository
+	repo       userRepository
 	uploadsDir string
 	baseURL    string
 }
 
 // NewUserHandler crée un UserHandler avec les dépendances nécessaires.
-func NewUserHandler(repo *repository.UserRepository, uploadsDir, baseURL string) *UserHandler {
+// *repository.UserRepository satisfait userRepository implicitement (duck typing Go).
+func NewUserHandler(repo userRepository, uploadsDir, baseURL string) *UserHandler {
 	return &UserHandler{repo: repo, uploadsDir: uploadsDir, baseURL: baseURL}
 }
 
