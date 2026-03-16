@@ -1,0 +1,17 @@
+{
+  "name": "retich-user",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.go": [
+      "gofmt -w"
+    ]
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0"
+  }
+}
