@@ -1,0 +1,25 @@
+{
+  "name": "retich-user",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "prepare": "husky",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
+  },
+  "lint-staged": {
+    "*.go": [
+      "gofmt -w"
+    ],
+    "*.json": [
+      "biome check --write --no-errors-on-unmatched"
+    ]
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.7",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0"
+  }
+}
