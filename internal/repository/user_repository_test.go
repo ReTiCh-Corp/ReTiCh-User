@@ -123,6 +123,23 @@ func TestUpdateByID_Found(t *testing.T) {
 	}
 }
 
+func TestUpdateByID_DBError(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery("UPDATE profiles").
+		WithArgs("test-id", "alice", nil, nil, nil, "online", nil).
+		WillReturnError(errors.New("connection lost"))
+
+	repo := NewUserRepository(db)
+	req := &model.UpdateProfileRequest{Username: "alice", Status: "online"}
+	_, err := repo.UpdateByID("test-id", req)
+
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Errorf("expected a db error, got %v", err)
+	}
+}
+
 func TestUpdateByID_NotFound(t *testing.T) {
 	db, mock := newMock(t)
 	defer db.Close()
@@ -161,6 +178,22 @@ func TestUpdateAvatarURL_Found(t *testing.T) {
 	}
 	if profile == nil {
 		t.Fatal("expected a profile, got nil")
+	}
+}
+
+func TestUpdateAvatarURL_DBError(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery("UPDATE profiles").
+		WithArgs("test-id", "http://localhost:8083/uploads/test-id.png").
+		WillReturnError(errors.New("connection lost"))
+
+	repo := NewUserRepository(db)
+	_, err := repo.UpdateAvatarURL("test-id", "http://localhost:8083/uploads/test-id.png")
+
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Errorf("expected a db error, got %v", err)
 	}
 }
 
@@ -261,6 +294,38 @@ func TestList_Empty(t *testing.T) {
 	}
 	if len(users) != 0 {
 		t.Errorf("expected 0 users, got %d", len(users))
+	}
+}
+
+func TestList_SelectQueryError(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT (.+) FROM profiles").
+		WillReturnError(errors.New("connection lost"))
+
+	repo := NewUserRepository(db)
+	_, _, err := repo.List("", "", 20, 0)
+
+	if err == nil {
+		t.Error("expected an error, got nil")
+	}
+}
+
+func TestList_WithSearchCountError(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles WHERE`).
+		WillReturnError(errors.New("connection lost"))
+
+	repo := NewUserRepository(db)
+	_, _, err := repo.List("alice", "", 20, 0)
+
+	if err == nil {
+		t.Error("expected an error, got nil")
 	}
 }
 

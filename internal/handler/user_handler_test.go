@@ -188,6 +188,21 @@ func TestUpdateProfile_400_MissingUsername(t *testing.T) {
 	}
 }
 
+func TestUpdateProfile_500(t *testing.T) {
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"username":"alice","status":"online"}`
+	req := httptest.NewRequest("PUT", "/users/test-id", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
 func TestUpdateProfile_404(t *testing.T) {
 	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
 	r := newTestRouter(h)
@@ -257,6 +272,19 @@ func TestUpdateAvatar_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestUpdateAvatar_500(t *testing.T) {
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
 	}
 }
 
@@ -339,6 +367,26 @@ func TestListUsers_Empty_200(t *testing.T) {
 	}
 	if len(resp.Data) != 0 {
 		t.Errorf("expected 0 users, got %d", len(resp.Data))
+	}
+}
+
+func TestListUsers_LimitCap_200(t *testing.T) {
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users?limit=200", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp.Pagination.Limit != 100 {
+		t.Errorf("expected limit capped at 100, got %d", resp.Pagination.Limit)
 	}
 }
 

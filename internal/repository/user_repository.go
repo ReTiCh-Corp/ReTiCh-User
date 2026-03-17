@@ -77,25 +77,27 @@ func (r *UserRepository) UpdateAvatarURL(id, avatarURL string) (*model.Profile, 
 	return profile, nil
 }
 
-// allowedSortColumns liste les valeurs autorisées pour le paramètre sort.
-// La clé est la valeur reçue du client, la valeur est la clause ORDER BY correspondante.
-// Le préfixe "-" indique un tri descendant.
-var allowedSortColumns = map[string]string{
-	"username":    "username ASC",
-	"-username":   "username DESC",
-	"created_at":  "created_at ASC",
-	"-created_at": "created_at DESC",
+// listQueries contient les requêtes SELECT pré-construites pour chaque option de tri.
+// Utiliser des requêtes statiques évite toute concaténation dynamique de SQL
+// et supprime les risques d'injection liés à la clause ORDER BY.
+var listQueries = map[string]string{
+	"username":    `SELECT id, COALESCE(email, ''), username FROM profiles ORDER BY username ASC LIMIT $1 OFFSET $2`,
+	"-username":   `SELECT id, COALESCE(email, ''), username FROM profiles ORDER BY username DESC LIMIT $1 OFFSET $2`,
+	"created_at":  `SELECT id, COALESCE(email, ''), username FROM profiles ORDER BY created_at ASC LIMIT $1 OFFSET $2`,
+	"-created_at": `SELECT id, COALESCE(email, ''), username FROM profiles ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+}
+
+var searchQueries = map[string]string{
+	"username":    `SELECT id, COALESCE(email, ''), username FROM profiles WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY username ASC LIMIT $2 OFFSET $3`,
+	"-username":   `SELECT id, COALESCE(email, ''), username FROM profiles WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY username DESC LIMIT $2 OFFSET $3`,
+	"created_at":  `SELECT id, COALESCE(email, ''), username FROM profiles WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3`,
+	"-created_at": `SELECT id, COALESCE(email, ''), username FROM profiles WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
 }
 
 // List retourne une page de UserSummary et le total correspondant.
 // Si search est non vide, filtre sur username et email (ILIKE).
-// sort doit être une des valeurs de allowedSortColumns ; défaut : "username ASC".
+// sort accepte : username, -username, created_at, -created_at (défaut : username).
 func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.UserSummary, int, error) {
-	orderBy, ok := allowedSortColumns[sort]
-	if !ok {
-		orderBy = "username ASC"
-	}
-
 	var total int
 	var rows *sql.Rows
 	var err error
@@ -109,24 +111,21 @@ func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.
 		if err != nil {
 			return nil, 0, err
 		}
-		rows, err = r.db.Query(
-			`SELECT id, COALESCE(email, ''), username FROM profiles
-			WHERE username ILIKE $1 OR email ILIKE $1
-			ORDER BY `+orderBy+`
-			LIMIT $2 OFFSET $3`,
-			pattern, limit, offset,
-		)
+		q, ok := searchQueries[sort]
+		if !ok {
+			q = searchQueries["username"]
+		}
+		rows, err = r.db.Query(q, pattern, limit, offset)
 	} else {
 		err = r.db.QueryRow(`SELECT COUNT(*) FROM profiles`).Scan(&total)
 		if err != nil {
 			return nil, 0, err
 		}
-		rows, err = r.db.Query(
-			`SELECT id, COALESCE(email, ''), username FROM profiles
-			ORDER BY `+orderBy+`
-			LIMIT $1 OFFSET $2`,
-			limit, offset,
-		)
+		q, ok := listQueries[sort]
+		if !ok {
+			q = listQueries["username"]
+		}
+		rows, err = r.db.Query(q, limit, offset)
 	}
 	if err != nil {
 		return nil, 0, err
