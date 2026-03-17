@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+// UserSummary est la représentation allégée retournée par le endpoint de listing.
+type UserSummary struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+}
+
 type Profile struct {
 	ID           string     `json:"id"`
 	Username     string     `json:"username"`

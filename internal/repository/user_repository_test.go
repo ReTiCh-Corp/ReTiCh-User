@@ -184,6 +184,14 @@ func TestUpdateAvatarURL_NotFound(t *testing.T) {
 // List
 // =============================================================================
 
+// summaryColumns are the columns returned by the List query.
+var summaryColumns = []string{"id", "email", "username"}
+
+// sampleSummaryRow returns a single UserSummary row for tests.
+func sampleSummaryRow() *sqlmock.Rows {
+	return sqlmock.NewRows(summaryColumns).AddRow("test-id", "alice@example.com", "alice")
+}
+
 func TestList_NoSearch(t *testing.T) {
 	db, mock := newMock(t)
 	defer db.Close()
@@ -191,10 +199,10 @@ func TestList_NoSearch(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("SELECT (.+) FROM profiles").
-		WillReturnRows(sampleRow())
+		WillReturnRows(sampleSummaryRow())
 
 	repo := NewUserRepository(db)
-	profiles, total, err := repo.List("", 20, 0)
+	users, total, err := repo.List("", "", 20, 0)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -202,8 +210,11 @@ func TestList_NoSearch(t *testing.T) {
 	if total != 1 {
 		t.Errorf("expected total 1, got %d", total)
 	}
-	if len(profiles) != 1 {
-		t.Errorf("expected 1 profile, got %d", len(profiles))
+	if len(users) != 1 {
+		t.Errorf("expected 1 user, got %d", len(users))
+	}
+	if users[0].Email != "alice@example.com" {
+		t.Errorf("expected email 'alice@example.com', got %q", users[0].Email)
 	}
 }
 
@@ -214,10 +225,10 @@ func TestList_WithSearch(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles WHERE`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("SELECT (.+) FROM profiles WHERE").
-		WillReturnRows(sampleRow())
+		WillReturnRows(sampleSummaryRow())
 
 	repo := NewUserRepository(db)
-	profiles, total, err := repo.List("alice", 20, 0)
+	users, total, err := repo.List("alice", "username", 20, 0)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -225,8 +236,8 @@ func TestList_WithSearch(t *testing.T) {
 	if total != 1 {
 		t.Errorf("expected total 1, got %d", total)
 	}
-	if len(profiles) != 1 {
-		t.Errorf("expected 1 profile, got %d", len(profiles))
+	if len(users) != 1 {
+		t.Errorf("expected 1 user, got %d", len(users))
 	}
 }
 
@@ -237,10 +248,10 @@ func TestList_Empty(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("SELECT (.+) FROM profiles").
-		WillReturnRows(sqlmock.NewRows(columns))
+		WillReturnRows(sqlmock.NewRows(summaryColumns))
 
 	repo := NewUserRepository(db)
-	profiles, total, err := repo.List("", 20, 0)
+	users, total, err := repo.List("", "-created_at", 20, 0)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -248,8 +259,8 @@ func TestList_Empty(t *testing.T) {
 	if total != 0 {
 		t.Errorf("expected total 0, got %d", total)
 	}
-	if len(profiles) != 0 {
-		t.Errorf("expected 0 profiles, got %d", len(profiles))
+	if len(users) != 0 {
+		t.Errorf("expected 0 users, got %d", len(users))
 	}
 }
 
@@ -261,7 +272,7 @@ func TestList_CountError(t *testing.T) {
 		WillReturnError(errors.New("connection lost"))
 
 	repo := NewUserRepository(db)
-	_, _, err := repo.List("", 20, 0)
+	_, _, err := repo.List("", "", 20, 0)
 
 	if err == nil {
 		t.Error("expected an error, got nil")

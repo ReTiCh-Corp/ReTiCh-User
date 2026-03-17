@@ -77,9 +77,25 @@ func (r *UserRepository) UpdateAvatarURL(id, avatarURL string) (*model.Profile, 
 	return profile, nil
 }
 
-// List retourne une page de profils et le total correspondant.
-// Si search est non vide, filtre sur username et display_name (ILIKE).
-func (r *UserRepository) List(search string, limit, offset int) ([]*model.Profile, int, error) {
+// allowedSortColumns liste les valeurs autorisées pour le paramètre sort.
+// La clé est la valeur reçue du client, la valeur est la clause ORDER BY correspondante.
+// Le préfixe "-" indique un tri descendant.
+var allowedSortColumns = map[string]string{
+	"username":    "username ASC",
+	"-username":   "username DESC",
+	"created_at":  "created_at ASC",
+	"-created_at": "created_at DESC",
+}
+
+// List retourne une page de UserSummary et le total correspondant.
+// Si search est non vide, filtre sur username et email (ILIKE).
+// sort doit être une des valeurs de allowedSortColumns ; défaut : "username ASC".
+func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.UserSummary, int, error) {
+	orderBy, ok := allowedSortColumns[sort]
+	if !ok {
+		orderBy = "username ASC"
+	}
+
 	var total int
 	var rows *sql.Rows
 	var err error
@@ -87,17 +103,16 @@ func (r *UserRepository) List(search string, limit, offset int) ([]*model.Profil
 	if search != "" {
 		pattern := "%" + search + "%"
 		err = r.db.QueryRow(
-			`SELECT COUNT(*) FROM profiles WHERE username ILIKE $1 OR display_name ILIKE $1`,
+			`SELECT COUNT(*) FROM profiles WHERE username ILIKE $1 OR email ILIKE $1`,
 			pattern,
 		).Scan(&total)
 		if err != nil {
 			return nil, 0, err
 		}
-		rows, err = r.db.Query(`
-			SELECT id, username, display_name, avatar_url, bio, status, custom_status, last_seen_at, created_at, updated_at
-			FROM profiles
-			WHERE username ILIKE $1 OR display_name ILIKE $1
-			ORDER BY username ASC
+		rows, err = r.db.Query(
+			`SELECT id, email, username FROM profiles
+			WHERE username ILIKE $1 OR email ILIKE $1
+			ORDER BY `+orderBy+`
 			LIMIT $2 OFFSET $3`,
 			pattern, limit, offset,
 		)
@@ -106,10 +121,9 @@ func (r *UserRepository) List(search string, limit, offset int) ([]*model.Profil
 		if err != nil {
 			return nil, 0, err
 		}
-		rows, err = r.db.Query(`
-			SELECT id, username, display_name, avatar_url, bio, status, custom_status, last_seen_at, created_at, updated_at
-			FROM profiles
-			ORDER BY username ASC
+		rows, err = r.db.Query(
+			`SELECT id, email, username FROM profiles
+			ORDER BY `+orderBy+`
 			LIMIT $1 OFFSET $2`,
 			limit, offset,
 		)
@@ -119,23 +133,19 @@ func (r *UserRepository) List(search string, limit, offset int) ([]*model.Profil
 	}
 	defer rows.Close()
 
-	var profiles []*model.Profile
+	var users []*model.UserSummary
 	for rows.Next() {
-		p := &model.Profile{}
-		if err := rows.Scan(
-			&p.ID, &p.Username, &p.DisplayName, &p.AvatarURL,
-			&p.Bio, &p.Status, &p.CustomStatus, &p.LastSeenAt,
-			&p.CreatedAt, &p.UpdatedAt,
-		); err != nil {
+		u := &model.UserSummary{}
+		if err := rows.Scan(&u.ID, &u.Email, &u.Username); err != nil {
 			return nil, 0, err
 		}
-		profiles = append(profiles, p)
+		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
 
-	return profiles, total, nil
+	return users, total, nil
 }
 
 func (r *UserRepository) GetByID(id string) (*model.Profile, error) {

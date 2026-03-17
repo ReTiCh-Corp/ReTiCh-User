@@ -33,14 +33,18 @@ type userRepository interface {
 	GetByID(id string) (*model.Profile, error)
 	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
 	UpdateAvatarURL(id, avatarURL string) (*model.Profile, error)
-	List(search string, limit, offset int) ([]*model.Profile, int, error)
+	List(search, sort string, limit, offset int) ([]*model.UserSummary, int, error)
+}
+
+type paginationMeta struct {
+	Total  int `json:"total"`
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
 }
 
 type listUsersResponse struct {
-	Users  []*model.Profile `json:"users"`
-	Total  int              `json:"total"`
-	Limit  int              `json:"limit"`
-	Offset int              `json:"offset"`
+	Data       []*model.UserSummary `json:"data"`
+	Pagination paginationMeta       `json:"pagination"`
 }
 
 // UserHandler regroupe tous les handlers HTTP liés aux utilisateurs.
@@ -175,7 +179,8 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 // Paramètres de requête :
 //   - limit  : nombre de résultats par page (défaut 20, max 100)
 //   - offset : décalage pour la pagination (défaut 0)
-//   - q      : terme de recherche sur username et display_name (optionnel)
+//   - search : terme de recherche sur username et email (optionnel, ILIKE)
+//   - sort   : colonne de tri — username, -username, created_at, -created_at (défaut : username)
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -202,23 +207,26 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		offset = v
 	}
 
-	search := q.Get("q")
+	search := q.Get("search")
+	sort := q.Get("sort")
 
-	profiles, total, err := h.repo.List(search, limit, offset)
+	users, total, err := h.repo.List(search, sort, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	if profiles == nil {
-		profiles = []*model.Profile{}
+	if users == nil {
+		users = []*model.UserSummary{}
 	}
 
 	writeJSON(w, http.StatusOK, listUsersResponse{
-		Users:  profiles,
-		Total:  total,
-		Limit:  limit,
-		Offset: offset,
+		Data: users,
+		Pagination: paginationMeta{
+			Total:  total,
+			Limit:  limit,
+			Offset: offset,
+		},
 	})
 }
 
