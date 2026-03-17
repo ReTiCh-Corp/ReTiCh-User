@@ -66,7 +66,7 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	userHandler := handler.NewUserHandler(userRepo, uploadsDir, baseURL)
 
-	r := mux.NewRouter()
+	r := mux.NewRouter().StrictSlash(true)
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 	r.HandleFunc("/ready", readyHandler).Methods("GET")
 	r.HandleFunc("/users", userHandler.ListUsers).Methods("GET")

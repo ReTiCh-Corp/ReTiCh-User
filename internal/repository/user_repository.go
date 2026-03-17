@@ -110,7 +110,7 @@ func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.
 			return nil, 0, err
 		}
 		rows, err = r.db.Query(
-			`SELECT id, email, username FROM profiles
+			`SELECT id, COALESCE(email, ''), username FROM profiles
 			WHERE username ILIKE $1 OR email ILIKE $1
 			ORDER BY `+orderBy+`
 			LIMIT $2 OFFSET $3`,
@@ -122,7 +122,7 @@ func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.
 			return nil, 0, err
 		}
 		rows, err = r.db.Query(
-			`SELECT id, email, username FROM profiles
+			`SELECT id, COALESCE(email, ''), username FROM profiles
 			ORDER BY `+orderBy+`
 			LIMIT $1 OFFSET $2`,
 			limit, offset,
