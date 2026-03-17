@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -11,6 +12,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/retich-corp/user/internal/handler"
+	"github.com/retich-corp/user/internal/repository"
+
+	_ "github.com/lib/pq"
 )
 
 type HealthResponse struct {
@@ -25,9 +30,55 @@ func main() {
 		port = "8083"
 	}
 
-	r := mux.NewRouter()
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required")
+	}
+
+	// UPLOADS_DIR : dossier où les avatars sont stockés sur disque.
+	uploadsDir := os.Getenv("UPLOADS_DIR")
+	if uploadsDir == "" {
+		uploadsDir = "./uploads"
+	}
+
+	// BASE_URL : URL publique du service, utilisée pour construire les liens d'avatars.
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:" + port
+	}
+
+	// Crée le dossier d'uploads s'il n'existe pas encore.
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		log.Fatalf("Failed to create uploads directory: %v", err)
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("Failed to open database connection: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	log.Println("Connected to database")
+
+	userRepo := repository.NewUserRepository(db)
+	userHandler := handler.NewUserHandler(userRepo, uploadsDir, baseURL)
+
+	r := mux.NewRouter().StrictSlash(true)
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 	r.HandleFunc("/ready", readyHandler).Methods("GET")
+	r.HandleFunc("/users", userHandler.ListUsers).Methods("GET")
+	r.HandleFunc("/users/{id}", userHandler.GetProfile).Methods("GET")
+	r.HandleFunc("/users/{id}", userHandler.UpdateProfile).Methods("PUT")
+	r.HandleFunc("/users/{id}/avatar", userHandler.UpdateAvatar).Methods("PATCH")
+
+	// Sert les fichiers statiques du dossier uploads (avatars) sous /uploads/.
+	// http.StripPrefix retire le préfixe de l'URL avant de chercher le fichier sur disque.
+	r.PathPrefix("/uploads/").Handler(
+		http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))),
+	)
 
 	srv := &http.Server{
 		Addr:         ":" + port,
