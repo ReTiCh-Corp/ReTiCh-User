@@ -179,3 +179,91 @@ func TestUpdateAvatarURL_NotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// =============================================================================
+// List
+// =============================================================================
+
+func TestList_NoSearch(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT (.+) FROM profiles").
+		WillReturnRows(sampleRow())
+
+	repo := NewUserRepository(db)
+	profiles, total, err := repo.List("", 20, 0)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected total 1, got %d", total)
+	}
+	if len(profiles) != 1 {
+		t.Errorf("expected 1 profile, got %d", len(profiles))
+	}
+}
+
+func TestList_WithSearch(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles WHERE`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT (.+) FROM profiles WHERE").
+		WillReturnRows(sampleRow())
+
+	repo := NewUserRepository(db)
+	profiles, total, err := repo.List("alice", 20, 0)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected total 1, got %d", total)
+	}
+	if len(profiles) != 1 {
+		t.Errorf("expected 1 profile, got %d", len(profiles))
+	}
+}
+
+func TestList_Empty(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT (.+) FROM profiles").
+		WillReturnRows(sqlmock.NewRows(columns))
+
+	repo := NewUserRepository(db)
+	profiles, total, err := repo.List("", 20, 0)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if total != 0 {
+		t.Errorf("expected total 0, got %d", total)
+	}
+	if len(profiles) != 0 {
+		t.Errorf("expected 0 profiles, got %d", len(profiles))
+	}
+}
+
+func TestList_CountError(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM profiles`).
+		WillReturnError(errors.New("connection lost"))
+
+	repo := NewUserRepository(db)
+	_, _, err := repo.List("", 20, 0)
+
+	if err == nil {
+		t.Error("expected an error, got nil")
+	}
+}

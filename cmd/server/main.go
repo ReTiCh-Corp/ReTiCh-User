@@ -69,6 +69,7 @@ func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 	r.HandleFunc("/ready", readyHandler).Methods("GET")
+	r.HandleFunc("/users", userHandler.ListUsers).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.UpdateProfile).Methods("PUT")
 	r.HandleFunc("/users/{id}/avatar", userHandler.UpdateAvatar).Methods("PATCH")

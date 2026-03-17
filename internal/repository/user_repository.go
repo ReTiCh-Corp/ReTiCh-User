@@ -77,6 +77,67 @@ func (r *UserRepository) UpdateAvatarURL(id, avatarURL string) (*model.Profile, 
 	return profile, nil
 }
 
+// List retourne une page de profils et le total correspondant.
+// Si search est non vide, filtre sur username et display_name (ILIKE).
+func (r *UserRepository) List(search string, limit, offset int) ([]*model.Profile, int, error) {
+	var total int
+	var rows *sql.Rows
+	var err error
+
+	if search != "" {
+		pattern := "%" + search + "%"
+		err = r.db.QueryRow(
+			`SELECT COUNT(*) FROM profiles WHERE username ILIKE $1 OR display_name ILIKE $1`,
+			pattern,
+		).Scan(&total)
+		if err != nil {
+			return nil, 0, err
+		}
+		rows, err = r.db.Query(`
+			SELECT id, username, display_name, avatar_url, bio, status, custom_status, last_seen_at, created_at, updated_at
+			FROM profiles
+			WHERE username ILIKE $1 OR display_name ILIKE $1
+			ORDER BY username ASC
+			LIMIT $2 OFFSET $3`,
+			pattern, limit, offset,
+		)
+	} else {
+		err = r.db.QueryRow(`SELECT COUNT(*) FROM profiles`).Scan(&total)
+		if err != nil {
+			return nil, 0, err
+		}
+		rows, err = r.db.Query(`
+			SELECT id, username, display_name, avatar_url, bio, status, custom_status, last_seen_at, created_at, updated_at
+			FROM profiles
+			ORDER BY username ASC
+			LIMIT $1 OFFSET $2`,
+			limit, offset,
+		)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var profiles []*model.Profile
+	for rows.Next() {
+		p := &model.Profile{}
+		if err := rows.Scan(
+			&p.ID, &p.Username, &p.DisplayName, &p.AvatarURL,
+			&p.Bio, &p.Status, &p.CustomStatus, &p.LastSeenAt,
+			&p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		profiles = append(profiles, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return profiles, total, nil
+}
+
 func (r *UserRepository) GetByID(id string) (*model.Profile, error) {
 	profile := &model.Profile{}
 	query := `

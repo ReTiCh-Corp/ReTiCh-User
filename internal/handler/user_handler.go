@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
@@ -32,6 +33,14 @@ type userRepository interface {
 	GetByID(id string) (*model.Profile, error)
 	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
 	UpdateAvatarURL(id, avatarURL string) (*model.Profile, error)
+	List(search string, limit, offset int) ([]*model.Profile, int, error)
+}
+
+type listUsersResponse struct {
+	Users  []*model.Profile `json:"users"`
+	Total  int              `json:"total"`
+	Limit  int              `json:"limit"`
+	Offset int              `json:"offset"`
 }
 
 // UserHandler regroupe tous les handlers HTTP liés aux utilisateurs.
@@ -160,6 +169,57 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, profile)
+}
+
+// ListUsers gère GET /users.
+// Paramètres de requête :
+//   - limit  : nombre de résultats par page (défaut 20, max 100)
+//   - offset : décalage pour la pagination (défaut 0)
+//   - q      : terme de recherche sur username et display_name (optionnel)
+func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	limit := 20
+	if raw := q.Get("limit"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be a positive integer"})
+			return
+		}
+		limit = v
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "offset must be a non-negative integer"})
+			return
+		}
+		offset = v
+	}
+
+	search := q.Get("q")
+
+	profiles, total, err := h.repo.List(search, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	if profiles == nil {
+		profiles = []*model.Profile{}
+	}
+
+	writeJSON(w, http.StatusOK, listUsersResponse{
+		Users:  profiles,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }
 
 // GetProfile gère GET /users/{id}.

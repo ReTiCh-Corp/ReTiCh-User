@@ -34,6 +34,16 @@ func (m *mockRepo) UpdateAvatarURL(_, _ string) (*model.Profile, error) {
 	return m.profile, m.err
 }
 
+func (m *mockRepo) List(_ string, _, _ int) ([]*model.Profile, int, error) {
+	if m.err != nil {
+		return nil, 0, m.err
+	}
+	if m.profile != nil {
+		return []*model.Profile{m.profile}, 1, nil
+	}
+	return []*model.Profile{}, 0, nil
+}
+
 // sampleProfile retourne un profil de test réutilisable.
 func sampleProfile() *model.Profile {
 	name := "Alice Dupont"
@@ -50,6 +60,7 @@ func sampleProfile() *model.Profile {
 // newTestRouter configure un routeur mux pour que mux.Vars() soit renseigné dans les tests.
 func newTestRouter(h *UserHandler) *mux.Router {
 	r := mux.NewRouter()
+	r.HandleFunc("/users", h.ListUsers).Methods("GET")
 	r.HandleFunc("/users/{id}", h.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", h.UpdateProfile).Methods("PUT")
 	r.HandleFunc("/users/{id}/avatar", h.UpdateAvatar).Methods("PATCH")
@@ -246,5 +257,123 @@ func TestUpdateAvatar_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+// =============================================================================
+// ListUsers
+// =============================================================================
+
+func TestListUsers_200(t *testing.T) {
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if len(resp.Users) != 1 {
+		t.Errorf("expected 1 user, got %d", len(resp.Users))
+	}
+	if resp.Total != 1 {
+		t.Errorf("expected total 1, got %d", resp.Total)
+	}
+	if resp.Limit != 20 {
+		t.Errorf("expected default limit 20, got %d", resp.Limit)
+	}
+	if resp.Offset != 0 {
+		t.Errorf("expected default offset 0, got %d", resp.Offset)
+	}
+}
+
+func TestListUsers_WithSearch_200(t *testing.T) {
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users?q=alice&limit=10&offset=5", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp.Limit != 10 {
+		t.Errorf("expected limit 10, got %d", resp.Limit)
+	}
+	if resp.Offset != 5 {
+		t.Errorf("expected offset 5, got %d", resp.Offset)
+	}
+}
+
+func TestListUsers_Empty_200(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp listUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp.Users == nil {
+		t.Error("expected non-nil users slice, got nil")
+	}
+	if len(resp.Users) != 0 {
+		t.Errorf("expected 0 users, got %d", len(resp.Users))
+	}
+}
+
+func TestListUsers_InvalidLimit_400(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users?limit=abc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestListUsers_NegativeOffset_400(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users?offset=-1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestListUsers_500(t *testing.T) {
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
 	}
 }
