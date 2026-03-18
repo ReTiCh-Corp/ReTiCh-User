@@ -5,21 +5,20 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
 	"github.com/retich-corp/user/internal/repository"
+	"github.com/retich-corp/user/internal/storage"
 )
 
-// maxUploadSize limite la taille des fichiers uploadés à 5 Mo.
+// maxUploadSize limite la taille des fichiers uploades a 5 Mo.
 const maxUploadSize = 5 * 1024 * 1024
 
-// allowedMIMETypes liste les types d'image acceptés.
-// La clé est le type MIME détecté depuis le contenu du fichier,
-// la valeur est l'extension à utiliser pour le nom du fichier sur disque.
+// allowedMIMETypes liste les types d'image acceptes.
+// La cle est le type MIME detecte depuis le contenu du fichier,
+// la valeur est l'extension a utiliser pour le nom du fichier stocke.
 var allowedMIMETypes = map[string]string{
 	"image/jpeg": ".jpg",
 	"image/png":  ".png",
@@ -27,8 +26,8 @@ var allowedMIMETypes = map[string]string{
 	"image/webp": ".webp",
 }
 
-// userRepository définit les opérations en base attendues par le handler.
-// Utiliser une interface permet d'injecter un mock dans les tests sans base de données réelle.
+// userRepository definit les operations en base attendues par le handler.
+// Utiliser une interface permet d'injecter un mock dans les tests sans base de donnees reelle.
 type userRepository interface {
 	GetByID(id string) (*model.Profile, error)
 	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
@@ -47,22 +46,23 @@ type listUsersResponse struct {
 	Pagination paginationMeta       `json:"pagination"`
 }
 
-// UserHandler regroupe tous les handlers HTTP liés aux utilisateurs.
-// uploadsDir : chemin du dossier où sont stockés les avatars sur disque.
-// baseURL    : URL publique de base pour construire les liens vers les avatars.
+// UserHandler regroupe tous les handlers HTTP lies aux utilisateurs.
+// Il depend de l'interface userRepository pour l'acces aux donnees
+// et de l'interface storage.AvatarStorage pour le stockage des avatars.
+// Cette architecture respecte le principe d'inversion de dependance (SOLID).
 type UserHandler struct {
-	repo       userRepository
-	uploadsDir string
-	baseURL    string
+	repo    userRepository
+	storage storage.AvatarStorage
 }
 
-// NewUserHandler crée un UserHandler avec les dépendances nécessaires.
-// *repository.UserRepository satisfait userRepository implicitement (duck typing Go).
-func NewUserHandler(repo userRepository, uploadsDir, baseURL string) *UserHandler {
-	return &UserHandler{repo: repo, uploadsDir: uploadsDir, baseURL: baseURL}
+// NewUserHandler cree un UserHandler avec les dependances necessaires.
+// repo : implementation du repository utilisateur (base de donnees).
+// avatarStorage : implementation du stockage des avatars (local, Azure Blob, etc.).
+func NewUserHandler(repo userRepository, avatarStorage storage.AvatarStorage) *UserHandler {
+	return &UserHandler{repo: repo, storage: avatarStorage}
 }
 
-// writeJSON factorise l'écriture d'une réponse JSON pour éviter la répétition
+// writeJSON factorise l'ecriture d'une reponse JSON pour eviter la repetition
 // du trio Header/WriteHeader/Encode dans chaque handler.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -70,21 +70,21 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	json.NewEncoder(w).Encode(body)
 }
 
-// UpdateAvatar gère PATCH /users/{id}/avatar.
+// UpdateAvatar gere PATCH /users/{id}/avatar.
 // Attend un formulaire multipart avec un champ "avatar" contenant le fichier image.
-// Le fichier est sauvegardé sous {uploadsDir}/{id}.{ext}, écrasant l'ancien avatar.
-// Répond 200 + profil complet mis à jour, ou 400 / 404 / 500 selon le cas.
+// Le fichier est uploade via l'interface AvatarStorage (local ou Azure Blob Storage).
+// Repond 200 + profil complet mis a jour, ou 400 / 404 / 500 selon le cas.
 func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
-	// Limite le body à maxUploadSize pour rejeter les gros fichiers avant même de les lire.
+	// Limite le body a maxUploadSize pour rejeter les gros fichiers avant meme de les lire.
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file too large (max 5MB)"})
 		return
 	}
 
-	// Récupère le fichier depuis le champ "avatar" du formulaire multipart.
+	// Recupere le fichier depuis le champ "avatar" du formulaire multipart.
 	file, _, err := r.FormFile("avatar")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "field 'avatar' is required"})
@@ -92,9 +92,9 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Détecte le type MIME réel depuis les premiers octets du fichier.
-	// On ne fait pas confiance au Content-Type envoyé par le client : n'importe qui
-	// pourrait envoyer un exécutable en prétendant que c'est une image.
+	// Detecte le type MIME reel depuis les premiers octets du fichier.
+	// On ne fait pas confiance au Content-Type envoye par le client : n'importe qui
+	// pourrait envoyer un executable en pretendant que c'est une image.
 	buf := make([]byte, 512)
 	n, err := file.Read(buf)
 	if err != nil {
@@ -108,31 +108,21 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remet le curseur au début du fichier pour pouvoir le lire en intégralité ensuite.
+	// Remet le curseur au debut du fichier pour pouvoir le lire en integralite ensuite.
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	// Nomme le fichier avec l'ID utilisateur : {id}.{ext}.
-	// Cela garantit qu'un second upload remplace automatiquement l'ancien avatar
-	// sans laisser de fichiers orphelins sur le disque.
-	filename := id + ext
-	dst, err := os.Create(filepath.Join(h.uploadsDir, filename))
+	// Delegue l'upload au service de stockage (local ou Azure Blob Storage).
+	// L'interface AvatarStorage gere la logique specifique a chaque backend.
+	avatarURL, err := h.storage.Upload(r.Context(), id, ext, file)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
-	defer dst.Close()
 
-	// Copie le fichier depuis la mémoire vers le disque.
-	if _, err = io.Copy(dst, file); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-		return
-	}
-
-	// Construit l'URL publique de l'avatar et met à jour la base de données.
-	avatarURL := h.baseURL + "/uploads/" + filename
+	// Met a jour l'URL de l'avatar en base de donnees.
 	profile, err := h.repo.UpdateAvatarURL(id, avatarURL)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -146,7 +136,7 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
-// UpdateProfile gère PUT /users/{id}.
+// UpdateProfile gere PUT /users/{id}.
 // Remplace tous les champs modifiables du profil (remplacement complet).
 func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
@@ -175,12 +165,12 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
-// ListUsers gère GET /users.
-// Paramètres de requête :
-//   - limit  : nombre de résultats par page (défaut 20, max 100)
-//   - offset : décalage pour la pagination (défaut 0)
+// ListUsers gere GET /users.
+// Parametres de requete :
+//   - limit  : nombre de resultats par page (defaut 20, max 100)
+//   - offset : decalage pour la pagination (defaut 0)
 //   - search : terme de recherche sur username et email (optionnel, ILIKE)
-//   - sort   : colonne de tri — username, -username, created_at, -created_at (défaut : username)
+//   - sort   : colonne de tri — username, -username, created_at, -created_at (defaut : username)
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -230,7 +220,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetProfile gère GET /users/{id}.
+// GetProfile gere GET /users/{id}.
 // Retourne le profil complet de l'utilisateur ou 404 s'il n'existe pas.
 func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]

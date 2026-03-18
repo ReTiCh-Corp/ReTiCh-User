@@ -14,10 +14,12 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/handler"
 	"github.com/retich-corp/user/internal/repository"
+	"github.com/retich-corp/user/internal/storage"
 
 	_ "github.com/lib/pq"
 )
 
+// HealthResponse represente la reponse du endpoint /health.
 type HealthResponse struct {
 	Status    string `json:"status"`
 	Service   string `json:"service"`
@@ -35,22 +37,10 @@ func main() {
 		log.Fatal("DATABASE_URL environment variable is required")
 	}
 
-	// UPLOADS_DIR : dossier où les avatars sont stockés sur disque.
-	uploadsDir := os.Getenv("UPLOADS_DIR")
-	if uploadsDir == "" {
-		uploadsDir = "./uploads"
-	}
-
-	// BASE_URL : URL publique du service, utilisée pour construire les liens d'avatars.
-	baseURL := os.Getenv("BASE_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:" + port
-	}
-
-	// Crée le dossier d'uploads s'il n'existe pas encore.
-	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-		log.Fatalf("Failed to create uploads directory: %v", err)
-	}
+	// Initialise le backend de stockage des avatars.
+	// Si les variables Azure sont presentes, utilise Azure Blob Storage.
+	// Sinon, utilise le stockage local comme fallback pour le developpement.
+	avatarStorage := initAvatarStorage(port)
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -64,7 +54,7 @@ func main() {
 	log.Println("Connected to database")
 
 	userRepo := repository.NewUserRepository(db)
-	userHandler := handler.NewUserHandler(userRepo, uploadsDir, baseURL)
+	userHandler := handler.NewUserHandler(userRepo, avatarStorage)
 
 	r := mux.NewRouter().StrictSlash(true)
 	r.HandleFunc("/health", healthHandler).Methods("GET")
@@ -74,11 +64,13 @@ func main() {
 	r.HandleFunc("/users/{id}", userHandler.UpdateProfile).Methods("PUT")
 	r.HandleFunc("/users/{id}/avatar", userHandler.UpdateAvatar).Methods("PATCH")
 
-	// Sert les fichiers statiques du dossier uploads (avatars) sous /uploads/.
-	// http.StripPrefix retire le préfixe de l'URL avant de chercher le fichier sur disque.
-	r.PathPrefix("/uploads/").Handler(
-		http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))),
-	)
+	// Sert les fichiers statiques uniquement en mode stockage local.
+	// En mode Azure Blob Storage, les fichiers sont servis directement par Azure.
+	if uploadsDir := os.Getenv("UPLOADS_DIR"); uploadsDir != "" {
+		r.PathPrefix("/uploads/").Handler(
+			http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))),
+		)
+	}
 
 	srv := &http.Server{
 		Addr:         ":" + port,
@@ -108,6 +100,46 @@ func main() {
 	}
 
 	log.Println("Server exited gracefully")
+}
+
+// initAvatarStorage determine le backend de stockage des avatars en fonction
+// des variables d'environnement configurees.
+// Si AZURE_STORAGE_ACCOUNT_NAME, AZURE_STORAGE_ACCOUNT_KEY et
+// AZURE_STORAGE_CONTAINER_NAME sont toutes definies, Azure Blob Storage est utilise.
+// Sinon, le stockage local est utilise avec UPLOADS_DIR et BASE_URL.
+func initAvatarStorage(port string) storage.AvatarStorage {
+	accountName := os.Getenv("AZURE_STORAGE_ACCOUNT_NAME")
+	accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT_KEY")
+	containerName := os.Getenv("AZURE_STORAGE_CONTAINER_NAME")
+
+	// Si les trois variables Azure sont presentes, on utilise Azure Blob Storage.
+	if accountName != "" && accountKey != "" && containerName != "" {
+		azureStorage, err := storage.NewAzureBlobStorage(accountName, accountKey, containerName)
+		if err != nil {
+			log.Fatalf("Echec de l'initialisation d'Azure Blob Storage: %v", err)
+		}
+		log.Printf("Mode stockage : Azure Blob Storage (compte: %s, conteneur: %s)", accountName, containerName)
+		return azureStorage
+	}
+
+	// Fallback : stockage local pour le developpement.
+	uploadsDir := os.Getenv("UPLOADS_DIR")
+	if uploadsDir == "" {
+		uploadsDir = "./uploads"
+	}
+
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:" + port
+	}
+
+	// Cree le dossier d'uploads s'il n'existe pas encore.
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		log.Fatalf("Echec de la creation du dossier uploads: %v", err)
+	}
+
+	log.Printf("Mode stockage : local (dossier: %s, URL de base: %s)", uploadsDir, baseURL)
+	return storage.NewLocalStorage(uploadsDir, baseURL)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {

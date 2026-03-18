@@ -2,8 +2,10 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +18,7 @@ import (
 	"github.com/retich-corp/user/internal/repository"
 )
 
-// mockRepo implémente userRepository pour les tests sans base de données.
+// mockRepo implemente userRepository pour les tests sans base de donnees.
 type mockRepo struct {
 	profile *model.Profile
 	err     error
@@ -44,7 +46,34 @@ func (m *mockRepo) List(_, _ string, _, _ int) ([]*model.UserSummary, int, error
 	return []*model.UserSummary{}, 0, nil
 }
 
-// sampleProfile retourne un profil de test réutilisable.
+// mockStorage implemente storage.AvatarStorage pour les tests.
+// Permet de simuler le comportement du stockage sans ecrire sur disque ni appeler Azure.
+type mockStorage struct {
+	// uploadURL est l'URL retournee par Upload.
+	uploadURL string
+	// uploadErr est l'erreur retournee par Upload.
+	uploadErr error
+	// deleteErr est l'erreur retournee par Delete.
+	deleteErr error
+	// uploadCalled indique si Upload a ete appele.
+	uploadCalled bool
+	// deleteCalled indique si Delete a ete appele.
+	deleteCalled bool
+}
+
+// Upload simule l'upload d'un avatar et retourne l'URL configuree ou une erreur.
+func (m *mockStorage) Upload(_ context.Context, _, _ string, _ io.Reader) (string, error) {
+	m.uploadCalled = true
+	return m.uploadURL, m.uploadErr
+}
+
+// Delete simule la suppression d'un avatar et retourne l'erreur configuree.
+func (m *mockStorage) Delete(_ context.Context, _ string) error {
+	m.deleteCalled = true
+	return m.deleteErr
+}
+
+// sampleProfile retourne un profil de test reutilisable.
 func sampleProfile() *model.Profile {
 	name := "Alice Dupont"
 	return &model.Profile{
@@ -57,7 +86,7 @@ func sampleProfile() *model.Profile {
 	}
 }
 
-// newTestRouter configure un routeur mux pour que mux.Vars() soit renseigné dans les tests.
+// newTestRouter configure un routeur mux pour que mux.Vars() soit renseigne dans les tests.
 func newTestRouter(h *UserHandler) *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/users", h.ListUsers).Methods("GET")
@@ -67,7 +96,7 @@ func newTestRouter(h *UserHandler) *mux.Router {
 	return r
 }
 
-// newAvatarRequest construit une requête multipart avec un fichier image simulé.
+// newAvatarRequest construit une requete multipart avec un fichier image simule.
 func newAvatarRequest(t *testing.T, userID string, content []byte, field string) *http.Request {
 	t.Helper()
 	body := &bytes.Buffer{}
@@ -85,7 +114,7 @@ func newAvatarRequest(t *testing.T, userID string, content []byte, field string)
 }
 
 // pngBytes retourne les octets de signature d'un fichier PNG valide.
-// http.DetectContentType reconnaît les 8 premiers octets comme "image/png".
+// http.DetectContentType reconnait les 8 premiers octets comme "image/png".
 func pngBytes() []byte {
 	return []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 }
@@ -95,7 +124,8 @@ func pngBytes() []byte {
 // =============================================================================
 
 func TestGetProfile_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{uploadURL: "http://localhost:8083/uploads/test-id.png"}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/test-id", nil)
@@ -115,7 +145,8 @@ func TestGetProfile_200(t *testing.T) {
 }
 
 func TestGetProfile_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/unknown", nil)
@@ -128,7 +159,8 @@ func TestGetProfile_404(t *testing.T) {
 }
 
 func TestGetProfile_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/test-id", nil)
@@ -145,7 +177,8 @@ func TestGetProfile_500(t *testing.T) {
 // =============================================================================
 
 func TestUpdateProfile_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -160,7 +193,8 @@ func TestUpdateProfile_200(t *testing.T) {
 }
 
 func TestUpdateProfile_400_InvalidJSON(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("PUT", "/users/test-id", strings.NewReader("not json"))
@@ -174,7 +208,8 @@ func TestUpdateProfile_400_InvalidJSON(t *testing.T) {
 }
 
 func TestUpdateProfile_400_MissingUsername(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{}, store)
 	r := newTestRouter(h)
 
 	body := `{"username":"","status":"online"}`
@@ -189,7 +224,8 @@ func TestUpdateProfile_400_MissingUsername(t *testing.T) {
 }
 
 func TestUpdateProfile_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, store)
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -204,7 +240,8 @@ func TestUpdateProfile_500(t *testing.T) {
 }
 
 func TestUpdateProfile_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, store)
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -223,7 +260,9 @@ func TestUpdateProfile_404(t *testing.T) {
 // =============================================================================
 
 func TestUpdateAvatar_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	// Configure le mock storage pour retourner une URL Azure simulee.
+	store := &mockStorage{uploadURL: "https://retichstorage.blob.core.windows.net/avatars/test-id.png"}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
@@ -233,10 +272,15 @@ func TestUpdateAvatar_200(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d — body: %s", w.Code, w.Body.String())
 	}
+	// Verifie que Upload a bien ete appele sur le storage.
+	if !store.uploadCalled {
+		t.Error("expected storage.Upload to be called")
+	}
 }
 
 func TestUpdateAvatar_400_MissingField(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	// Le champ s'appelle "file" au lieu de "avatar".
@@ -250,7 +294,8 @@ func TestUpdateAvatar_400_MissingField(t *testing.T) {
 }
 
 func TestUpdateAvatar_400_InvalidMIME(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", []byte("this is plain text"), "avatar")
@@ -263,7 +308,8 @@ func TestUpdateAvatar_400_InvalidMIME(t *testing.T) {
 }
 
 func TestUpdateAvatar_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{uploadURL: "https://retichstorage.blob.core.windows.net/avatars/unknown.png"}
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, store)
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "unknown", pngBytes(), "avatar")
@@ -275,8 +321,9 @@ func TestUpdateAvatar_404(t *testing.T) {
 	}
 }
 
-func TestUpdateAvatar_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+func TestUpdateAvatar_500_DBError(t *testing.T) {
+	store := &mockStorage{uploadURL: "https://retichstorage.blob.core.windows.net/avatars/test-id.png"}
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, store)
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
@@ -288,12 +335,33 @@ func TestUpdateAvatar_500(t *testing.T) {
 	}
 }
 
+// TestUpdateAvatar_500_StorageError verifie que le handler retourne 500
+// lorsque le stockage (Azure Blob ou local) echoue lors de l'upload.
+func TestUpdateAvatar_500_StorageError(t *testing.T) {
+	store := &mockStorage{uploadErr: errors.New("azure connection failed")}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
+	r := newTestRouter(h)
+
+	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+	// Verifie que Upload a bien ete appele malgre l'erreur.
+	if !store.uploadCalled {
+		t.Error("expected storage.Upload to be called")
+	}
+}
+
 // =============================================================================
 // ListUsers
 // =============================================================================
 
 func TestListUsers_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
@@ -322,7 +390,8 @@ func TestListUsers_200(t *testing.T) {
 }
 
 func TestListUsers_WithSearch_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?search=alice&sort=-username&limit=10&offset=5", nil)
@@ -348,7 +417,8 @@ func TestListUsers_WithSearch_200(t *testing.T) {
 }
 
 func TestListUsers_Empty_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
@@ -371,7 +441,8 @@ func TestListUsers_Empty_200(t *testing.T) {
 }
 
 func TestListUsers_LimitCap_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?limit=200", nil)
@@ -391,7 +462,8 @@ func TestListUsers_LimitCap_200(t *testing.T) {
 }
 
 func TestListUsers_InvalidLimit_400(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?limit=abc", nil)
@@ -404,7 +476,8 @@ func TestListUsers_InvalidLimit_400(t *testing.T) {
 }
 
 func TestListUsers_NegativeOffset_400(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?offset=-1", nil)
@@ -417,7 +490,8 @@ func TestListUsers_NegativeOffset_400(t *testing.T) {
 }
 
 func TestListUsers_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	store := &mockStorage{}
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, store)
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
