@@ -19,6 +19,7 @@ import (
 // mockRepo implémente userRepository pour les tests sans base de données.
 type mockRepo struct {
 	profile *model.Profile
+	user    *model.User
 	err     error
 }
 
@@ -39,17 +40,45 @@ func (m *mockRepo) List(_, _ string, _, _ int) ([]*model.UserSummary, int, error
 		return nil, 0, m.err
 	}
 	if m.profile != nil {
-		return []*model.UserSummary{{ID: m.profile.ID, Email: "alice@example.com", Username: m.profile.Username}}, 1, nil
+		username := ""
+		if m.profile.Username != nil {
+			username = *m.profile.Username
+		}
+		return []*model.UserSummary{{ID: m.profile.ID, Email: "alice@example.com", Username: username}}, 1, nil
 	}
 	return []*model.UserSummary{}, 0, nil
+}
+
+func (m *mockRepo) Create(id, email string) (*model.User, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &model.User{
+		ID:                  id,
+		Email:               email,
+		OnboardingCompleted: false,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}, nil
+}
+
+func (m *mockRepo) GetByEmail(_ string) (*model.User, error) {
+	if m.user != nil {
+		return m.user, nil
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	return nil, repository.ErrNotFound
 }
 
 // sampleProfile retourne un profil de test réutilisable.
 func sampleProfile() *model.Profile {
 	name := "Alice Dupont"
+	username := "alice"
 	return &model.Profile{
 		ID:          "test-id",
-		Username:    "alice",
+		Username:    &username,
 		DisplayName: &name,
 		Status:      "online",
 		CreatedAt:   time.Now(),
@@ -60,6 +89,7 @@ func sampleProfile() *model.Profile {
 // newTestRouter configure un routeur mux pour que mux.Vars() soit renseigné dans les tests.
 func newTestRouter(h *UserHandler) *mux.Router {
 	r := mux.NewRouter()
+	r.HandleFunc("/users", h.CreateUser).Methods("POST")
 	r.HandleFunc("/users", h.ListUsers).Methods("GET")
 	r.HandleFunc("/users/{id}", h.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", h.UpdateProfile).Methods("PUT")
@@ -88,6 +118,126 @@ func newAvatarRequest(t *testing.T, userID string, content []byte, field string)
 // http.DetectContentType reconnaît les 8 premiers octets comme "image/png".
 func pngBytes() []byte {
 	return []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+}
+
+// =============================================================================
+// CreateUser
+// =============================================================================
+
+func TestCreateUser_201_NewUser(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"id":"new-uuid","email":"new@example.com"}`
+	req := httptest.NewRequest("POST", "/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d — body: %s", w.Code, w.Body.String())
+	}
+	var resp model.CreateUserResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if !resp.IsNewUser {
+		t.Error("expected is_new_user to be true")
+	}
+	if resp.OnboardingCompleted {
+		t.Error("expected onboarding_completed to be false")
+	}
+}
+
+func TestCreateUser_200_ExistingUser(t *testing.T) {
+	existing := &model.User{
+		ID:                  "existing-uuid",
+		Email:               "existing@example.com",
+		OnboardingCompleted: false,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+	h := NewUserHandler(&mockRepo{user: existing}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"id":"new-uuid","email":"existing@example.com"}`
+	req := httptest.NewRequest("POST", "/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", w.Code, w.Body.String())
+	}
+	var resp model.CreateUserResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp.IsNewUser {
+		t.Error("expected is_new_user to be false")
+	}
+	if resp.ID != "existing-uuid" {
+		t.Errorf("expected ID 'existing-uuid', got %q", resp.ID)
+	}
+}
+
+func TestCreateUser_400_MissingID(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"email":"test@example.com"}`
+	req := httptest.NewRequest("POST", "/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCreateUser_400_MissingEmail(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"id":"some-uuid"}`
+	req := httptest.NewRequest("POST", "/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCreateUser_400_InvalidJSON(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("POST", "/users", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCreateUser_500_DBError(t *testing.T) {
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	body := `{"id":"new-uuid","email":"new@example.com"}`
+	req := httptest.NewRequest("POST", "/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
 }
 
 // =============================================================================

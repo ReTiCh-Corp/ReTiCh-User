@@ -34,6 +34,8 @@ type userRepository interface {
 	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
 	UpdateAvatarURL(id, avatarURL string) (*model.Profile, error)
 	List(search, sort string, limit, offset int) ([]*model.UserSummary, int, error)
+	Create(id, email string) (*model.User, error)
+	GetByEmail(email string) (*model.User, error)
 }
 
 type paginationMeta struct {
@@ -68,6 +70,56 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// CreateUser gère POST /users.
+// Crée un utilisateur "vide" à partir de l'id et l'email reçus du service d'auth.
+// Si l'email existe déjà, retourne l'utilisateur existant avec is_new_user: false.
+func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+		return
+	}
+
+	// Vérifier si l'utilisateur existe déjà.
+	existing, err := h.repo.GetByEmail(req.Email)
+	if err == nil {
+		writeJSON(w, http.StatusOK, model.CreateUserResponse{
+			ID:                  existing.ID,
+			Email:               existing.Email,
+			OnboardingCompleted: existing.OnboardingCompleted,
+			IsNewUser:           false,
+		})
+		return
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	// Créer le nouvel utilisateur.
+	user, err := h.repo.Create(req.ID, req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, model.CreateUserResponse{
+		ID:                  user.ID,
+		Email:               user.Email,
+		OnboardingCompleted: user.OnboardingCompleted,
+		IsNewUser:           true,
+	})
 }
 
 // UpdateAvatar gère PATCH /users/{id}/avatar.
