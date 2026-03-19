@@ -2,3 +2,5 @@ node_modules/
 tmp/
 uploads/
 coverage.out
+.claude
+.env*
