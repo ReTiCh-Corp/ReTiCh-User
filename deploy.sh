@@ -55,6 +55,21 @@ az account show >/dev/null 2>&1 || err "Non connecté à Azure. Lance : az login
 ACCOUNT=$(az account show --query name -o tsv)
 log "Connecté au compte Azure : $ACCOUNT"
 
+# --- Étape 0 : Migrations de base de données -----------------
+echo ""
+warn "Étape 0/5 — Migrations de base de données..."
+
+if ! command -v migrate >/dev/null 2>&1; then
+    err "L'outil 'migrate' n'est pas installé. Installe-le : brew install golang-migrate"
+fi
+
+log "Exécution des migrations sur la base de production..."
+if migrate -path "$SCRIPT_DIR/migrations" -database "$DATABASE_URL" up; then
+    log "Migrations appliquées avec succès."
+else
+    err "Échec des migrations. Déploiement annulé."
+fi
+
 # --- Étape 1 : Vérifier le Resource Group --------------------
 echo ""
 warn "Étape 1/5 — Vérification du Resource Group..."

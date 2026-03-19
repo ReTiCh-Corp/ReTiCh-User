@@ -3,6 +3,9 @@ FROM golang:1.22-alpine
 # Install Air for hot-reload
 RUN go install github.com/air-verse/air@v1.52.3
 
+# Install golang-migrate CLI for manual migrations in dev
+RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
 WORKDIR /app
 
 # Copy dependency files

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/handler"
 	"github.com/retich-corp/user/internal/repository"
@@ -63,12 +67,33 @@ func main() {
 	}
 	log.Println("Connected to database")
 
+	// AUTO_MIGRATE=true : exécute les migrations au démarrage (dev uniquement).
+	if os.Getenv("AUTO_MIGRATE") == "true" {
+		migrationsPath := os.Getenv("MIGRATIONS_PATH")
+		if migrationsPath == "" {
+			migrationsPath = "file://migrations"
+		}
+		driver, err := postgres.WithInstance(db, &postgres.Config{})
+		if err != nil {
+			log.Fatalf("Failed to create migration driver: %v", err)
+		}
+		m, err := migrate.NewWithDatabaseInstance(migrationsPath, "postgres", driver)
+		if err != nil {
+			log.Fatalf("Failed to initialize migrations: %v", err)
+		}
+		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			log.Fatalf("Failed to run migrations: %v", err)
+		}
+		log.Println("Migrations applied successfully")
+	}
+
 	userRepo := repository.NewUserRepository(db)
 	userHandler := handler.NewUserHandler(userRepo, uploadsDir, baseURL)
 
 	r := mux.NewRouter().StrictSlash(true)
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 	r.HandleFunc("/ready", readyHandler).Methods("GET")
+	r.HandleFunc("/users", userHandler.CreateUser).Methods("POST")
 	r.HandleFunc("/users", userHandler.ListUsers).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.UpdateProfile).Methods("PUT")
