@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
@@ -33,6 +34,7 @@ var allowedMIMETypes = map[string]string{
 // userRepository définit les opérations en base attendues par le handler.
 // Utiliser une interface permet d'injecter un mock dans les tests sans base de données réelle.
 type userRepository interface {
+	EnsureUserAndProfile(id, email string) error
 	GetByID(id string) (*model.Profile, error)
 	UpdateByID(id string, req *model.UpdateProfileRequest) (*model.Profile, error)
 	UpdateAvatarURL(id, avatarURL string) (*model.Profile, error)
@@ -132,6 +134,12 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 // Répond 200 + profil complet mis à jour, ou 400 / 404 / 500 selon le cas.
 func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	email := r.Header.Get("X-User-Email")
+
+	if err := h.repo.EnsureUserAndProfile(id, email); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
 
 	// Limite le body à maxUploadSize pour rejeter les gros fichiers avant même de les lire.
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
@@ -206,6 +214,12 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 // Remplace tous les champs modifiables du profil (remplacement complet).
 func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	email := r.Header.Get("X-User-Email")
+
+	if err := h.repo.EnsureUserAndProfile(id, email); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
 
 	var req model.UpdateProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -216,6 +230,14 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if req.Username == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username is required"})
 		return
+	}
+
+	// Auto-générer display_name si non fourni et first/last name présents.
+	if req.DisplayName == nil && req.FirstName != nil && req.LastName != nil {
+		dn := strings.TrimSpace(*req.FirstName + " " + *req.LastName)
+		if dn != "" {
+			req.DisplayName = &dn
+		}
 	}
 
 	profile, err := h.repo.UpdateByID(id, &req)
@@ -317,6 +339,11 @@ func (h *UserHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
 // Retourne le profil complet de l'utilisateur ou 404 s'il n'existe pas.
 func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	email := r.Header.Get("X-User-Email")
+
+	if email != "" {
+		_ = h.repo.EnsureUserAndProfile(id, email)
+	}
 
 	profile, err := h.repo.GetByID(id)
 	if err != nil {
