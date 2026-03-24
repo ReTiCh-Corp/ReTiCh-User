@@ -18,9 +18,11 @@ import (
 
 // mockRepo implémente userRepository pour les tests sans base de données.
 type mockRepo struct {
-	profile *model.Profile
-	user    *model.User
-	err     error
+	profile         *model.Profile
+	user            *model.User
+	err             error
+	usernameProfile *model.Profile
+	usernameErr     error
 }
 
 func (m *mockRepo) GetByID(_ string) (*model.Profile, error) {
@@ -62,6 +64,16 @@ func (m *mockRepo) Create(id, email string) (*model.User, error) {
 	}, nil
 }
 
+func (m *mockRepo) GetByUsername(_ string) (*model.Profile, error) {
+	if m.usernameProfile != nil {
+		return m.usernameProfile, nil
+	}
+	if m.usernameErr != nil {
+		return nil, m.usernameErr
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (m *mockRepo) GetByEmail(_ string) (*model.User, error) {
 	if m.user != nil {
 		return m.user, nil
@@ -91,6 +103,7 @@ func newTestRouter(h *UserHandler) *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/users", h.CreateUser).Methods("POST")
 	r.HandleFunc("/users", h.ListUsers).Methods("GET")
+	r.HandleFunc("/users/check-username", h.CheckUsername).Methods("GET")
 	r.HandleFunc("/users/{id}", h.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", h.UpdateProfile).Methods("PUT")
 	r.HandleFunc("/users/{id}/avatar", h.UpdateAvatar).Methods("PATCH")
@@ -571,6 +584,89 @@ func TestListUsers_500(t *testing.T) {
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// =============================================================================
+// CheckUsername
+// =============================================================================
+
+func TestCheckUsername_Available(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users/check-username?username=new_user", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]bool
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if !resp["available"] {
+		t.Error("expected available to be true")
+	}
+}
+
+func TestCheckUsername_Taken(t *testing.T) {
+	h := NewUserHandler(&mockRepo{usernameProfile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users/check-username?username=alice", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]bool
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if resp["available"] {
+		t.Error("expected available to be false")
+	}
+}
+
+func TestCheckUsername_MissingParam(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users/check-username", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCheckUsername_InvalidFormat(t *testing.T) {
+	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users/check-username?username=ab", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d — body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCheckUsername_500(t *testing.T) {
+	h := NewUserHandler(&mockRepo{usernameErr: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	r := newTestRouter(h)
+
+	req := httptest.NewRequest("GET", "/users/check-username?username=some_user", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

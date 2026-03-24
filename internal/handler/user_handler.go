@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
 	"github.com/retich-corp/user/internal/repository"
 )
+
+var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{3,30}$`)
 
 // maxUploadSize limite la taille des fichiers uploadés à 5 Mo.
 const maxUploadSize = 5 * 1024 * 1024
@@ -36,6 +39,7 @@ type userRepository interface {
 	List(search, sort string, limit, offset int) ([]*model.UserSummary, int, error)
 	Create(id, email string) (*model.User, error)
 	GetByEmail(email string) (*model.User, error)
+	GetByUsername(username string) (*model.Profile, error)
 }
 
 type paginationMeta struct {
@@ -280,6 +284,33 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			Offset: offset,
 		},
 	})
+}
+
+// CheckUsername gère GET /users/check-username?username=xxx.
+// Vérifie si un username est disponible et valide.
+func (h *UserHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+
+	if !usernameRegex.MatchString(username) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username must be 3-30 characters: letters, digits and underscores only"})
+		return
+	}
+
+	_, err := h.repo.GetByUsername(username)
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]bool{"available": false})
+		return
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"available": true})
 }
 
 // GetProfile gère GET /users/{id}.
