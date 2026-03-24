@@ -17,15 +17,38 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-// Create insère un nouvel utilisateur dans la table users.
+// EnsureUserAndProfile garantit qu'une ligne existe dans users ET profiles
+// pour l'ID donné. Idempotent grâce à ON CONFLICT DO NOTHING.
+func (r *UserRepository) EnsureUserAndProfile(id, email string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, id, email)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO profiles (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, id)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Create insère un nouvel utilisateur dans les tables users et profiles.
 func (r *UserRepository) Create(id, email string) (*model.User, error) {
+	if err := r.EnsureUserAndProfile(id, email); err != nil {
+		return nil, err
+	}
+
 	user := &model.User{}
 	query := `
-		INSERT INTO users (id, email)
-		VALUES ($1, $2)
-		RETURNING id, email, onboarding_completed, created_at, updated_at`
+		SELECT id, email, onboarding_completed, created_at, updated_at
+		FROM users WHERE id = $1`
 
-	err := r.db.QueryRow(query, id, email).Scan(
+	err := r.db.QueryRow(query, id).Scan(
 		&user.ID,
 		&user.Email,
 		&user.OnboardingCompleted,

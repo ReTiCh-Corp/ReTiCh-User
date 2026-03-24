@@ -25,6 +25,10 @@ type mockRepo struct {
 	usernameErr     error
 }
 
+func (m *mockRepo) EnsureUserAndProfile(_, _ string) error {
+	return nil
+}
+
 func (m *mockRepo) GetByID(_ string) (*model.Profile, error) {
 	return m.profile, m.err
 }

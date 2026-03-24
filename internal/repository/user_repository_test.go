@@ -60,8 +60,16 @@ func TestCreate_Success(t *testing.T) {
 	db, mock := newMock(t)
 	defer db.Close()
 
-	mock.ExpectQuery("INSERT INTO users").
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").
 		WithArgs("new-uuid", "new@example.com").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO profiles").
+		WithArgs("new-uuid").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT .+ FROM users WHERE id").
+		WithArgs("new-uuid").
 		WillReturnRows(sampleUserRow())
 
 	repo := NewUserRepository(db)
@@ -82,15 +90,38 @@ func TestCreate_DBError(t *testing.T) {
 	db, mock := newMock(t)
 	defer db.Close()
 
-	mock.ExpectQuery("INSERT INTO users").
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").
 		WithArgs("new-uuid", "new@example.com").
 		WillReturnError(errors.New("duplicate key"))
+	mock.ExpectRollback()
 
 	repo := NewUserRepository(db)
 	_, err := repo.Create("new-uuid", "new@example.com")
 
 	if err == nil {
 		t.Error("expected an error, got nil")
+	}
+}
+
+func TestEnsureUserAndProfile_Success(t *testing.T) {
+	db, mock := newMock(t)
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").
+		WithArgs("uuid-1", "test@example.com").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO profiles").
+		WithArgs("uuid-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	repo := NewUserRepository(db)
+	err := repo.EnsureUserAndProfile("uuid-1", "test@example.com")
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
