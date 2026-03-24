@@ -202,6 +202,40 @@ func (r *UserRepository) List(search, sort string, limit, offset int) ([]*model.
 	return users, total, nil
 }
 
+// GetByUsername retourne un profil par son username, ou ErrNotFound.
+func (r *UserRepository) GetByUsername(username string) (*model.Profile, error) {
+	profile := &model.Profile{}
+	query := `
+		SELECT id, username, display_name, avatar_url, bio, status, custom_status,
+		       first_name, last_name, gender, phone, last_seen_at, created_at, updated_at
+		FROM profiles
+		WHERE username = $1`
+
+	err := r.db.QueryRow(query, username).Scan(
+		&profile.ID,
+		&profile.Username,
+		&profile.DisplayName,
+		&profile.AvatarURL,
+		&profile.Bio,
+		&profile.Status,
+		&profile.CustomStatus,
+		&profile.FirstName,
+		&profile.LastName,
+		&profile.Gender,
+		&profile.Phone,
+		&profile.LastSeenAt,
+		&profile.CreatedAt,
+		&profile.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
 func (r *UserRepository) GetByID(id string) (*model.Profile, error) {
 	profile := &model.Profile{}
 	query := `
