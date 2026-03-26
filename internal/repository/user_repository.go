@@ -259,6 +259,25 @@ func (r *UserRepository) GetByUsername(username string) (*model.Profile, error) 
 	return profile, nil
 }
 
+// CompleteOnboarding marque l'onboarding comme terminé pour l'utilisateur donné.
+func (r *UserRepository) CompleteOnboarding(id string) error {
+	result, err := r.db.Exec(
+		`UPDATE users SET onboarding_completed = true, updated_at = NOW() WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *UserRepository) GetByID(id string) (*model.Profile, error) {
 	profile := &model.Profile{}
 	query := `

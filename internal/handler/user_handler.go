@@ -42,6 +42,7 @@ type userRepository interface {
 	Create(id, email string) (*model.User, error)
 	GetByEmail(email string) (*model.User, error)
 	GetByUsername(username string) (*model.Profile, error)
+	CompleteOnboarding(id string) error
 }
 
 type paginationMeta struct {
@@ -333,6 +334,21 @@ func (h *UserHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"available": true})
+}
+
+// CompleteOnboarding gère PATCH /users/{id}/onboarding.
+// Marque l'onboarding comme terminé pour l'utilisateur.
+func (h *UserHandler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if err := h.repo.CompleteOnboarding(id); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GetProfile gère GET /users/{id}.

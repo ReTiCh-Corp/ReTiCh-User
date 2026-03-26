@@ -98,6 +98,7 @@ func main() {
 	r.HandleFunc("/users/check-username", userHandler.CheckUsername).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.GetProfile).Methods("GET")
 	r.HandleFunc("/users/{id}", userHandler.UpdateProfile).Methods("PUT")
+	r.HandleFunc("/users/{id}/onboarding", userHandler.CompleteOnboarding).Methods("PATCH")
 	r.HandleFunc("/users/{id}/avatar", userHandler.UpdateAvatar).Methods("PATCH")
 
 	// Sert les fichiers statiques du dossier uploads (avatars) sous /uploads/.
