@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/handler"
 	"github.com/retich-corp/user/internal/repository"
+	"github.com/retich-corp/user/internal/storage"
 
 	_ "github.com/lib/pq"
 )
@@ -39,22 +40,8 @@ func main() {
 		log.Fatal("DATABASE_URL environment variable is required")
 	}
 
-	// UPLOADS_DIR : dossier où les avatars sont stockés sur disque.
-	uploadsDir := os.Getenv("UPLOADS_DIR")
-	if uploadsDir == "" {
-		uploadsDir = "./uploads"
-	}
-
-	// BASE_URL : URL publique du service, utilisée pour construire les liens d'avatars.
-	baseURL := os.Getenv("BASE_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:" + port
-	}
-
-	// Crée le dossier d'uploads s'il n'existe pas encore.
-	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-		log.Fatalf("Failed to create uploads directory: %v", err)
-	}
+	// Initialize avatar storage (Azure Blob in prod, local in dev)
+	avatarStorage, uploadsDir := initAvatarStorage(port)
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -88,7 +75,7 @@ func main() {
 	}
 
 	userRepo := repository.NewUserRepository(db)
-	userHandler := handler.NewUserHandler(userRepo, uploadsDir, baseURL)
+	userHandler := handler.NewUserHandler(userRepo, avatarStorage)
 
 	r := mux.NewRouter().StrictSlash(true)
 	r.HandleFunc("/health", healthHandler).Methods("GET")
@@ -101,11 +88,12 @@ func main() {
 	r.HandleFunc("/users/{id}/onboarding", userHandler.CompleteOnboarding).Methods("PATCH")
 	r.HandleFunc("/users/{id}/avatar", userHandler.UpdateAvatar).Methods("PATCH")
 
-	// Sert les fichiers statiques du dossier uploads (avatars) sous /uploads/.
-	// http.StripPrefix retire le préfixe de l'URL avant de chercher le fichier sur disque.
-	r.PathPrefix("/uploads/").Handler(
-		http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))),
-	)
+	// Serve static files only in local storage mode
+	if uploadsDir != "" {
+		r.PathPrefix("/uploads/").Handler(
+			http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))),
+		)
+	}
 
 	srv := &http.Server{
 		Addr:         ":" + port,
@@ -150,4 +138,37 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func readyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+}
+
+// initAvatarStorage picks Azure Blob Storage if env vars are set, otherwise local.
+// Returns the storage backend and the uploads directory (empty string if Azure).
+func initAvatarStorage(port string) (storage.AvatarStorage, string) {
+	accountName := os.Getenv("AZURE_STORAGE_ACCOUNT_NAME")
+	accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT_KEY")
+	containerName := os.Getenv("AZURE_STORAGE_CONTAINER_NAME")
+
+	if accountName != "" && accountKey != "" && containerName != "" {
+		azureStorage, err := storage.NewAzureBlobStorage(accountName, accountKey, containerName)
+		if err != nil {
+			log.Fatalf("Failed to initialize Azure Blob Storage: %v", err)
+		}
+		log.Printf("Storage: Azure Blob Storage (account: %s, container: %s)", accountName, containerName)
+		return azureStorage, ""
+	}
+
+	uploadsDir := os.Getenv("UPLOADS_DIR")
+	if uploadsDir == "" {
+		uploadsDir = "./uploads"
+	}
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:" + port
+	}
+
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		log.Fatalf("Failed to create uploads directory: %v", err)
+	}
+
+	log.Printf("Storage: local (dir: %s, base URL: %s)", uploadsDir, baseURL)
+	return storage.NewLocalStorage(uploadsDir, baseURL), uploadsDir
 }

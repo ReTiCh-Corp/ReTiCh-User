@@ -14,7 +14,14 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
 	"github.com/retich-corp/user/internal/repository"
+	"github.com/retich-corp/user/internal/storage"
 )
+
+// testStorage creates a local storage for tests.
+func testStorage(t *testing.T) storage.AvatarStorage {
+	t.Helper()
+	return storage.NewLocalStorage(t.TempDir(), "http://localhost:8083")
+}
 
 // mockRepo implémente userRepository pour les tests sans base de données.
 type mockRepo struct {
@@ -142,7 +149,7 @@ func pngBytes() []byte {
 // =============================================================================
 
 func TestCreateUser_201_NewUser(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"id":"new-uuid","email":"new@example.com"}`
@@ -174,7 +181,7 @@ func TestCreateUser_200_ExistingUser(t *testing.T) {
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
 	}
-	h := NewUserHandler(&mockRepo{user: existing}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{user: existing}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"id":"new-uuid","email":"existing@example.com"}`
@@ -199,7 +206,7 @@ func TestCreateUser_200_ExistingUser(t *testing.T) {
 }
 
 func TestCreateUser_400_MissingID(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"email":"test@example.com"}`
@@ -214,7 +221,7 @@ func TestCreateUser_400_MissingID(t *testing.T) {
 }
 
 func TestCreateUser_400_MissingEmail(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"id":"some-uuid"}`
@@ -229,7 +236,7 @@ func TestCreateUser_400_MissingEmail(t *testing.T) {
 }
 
 func TestCreateUser_400_InvalidJSON(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("POST", "/users", strings.NewReader("not json"))
@@ -243,7 +250,7 @@ func TestCreateUser_400_InvalidJSON(t *testing.T) {
 }
 
 func TestCreateUser_500_DBError(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"id":"new-uuid","email":"new@example.com"}`
@@ -262,7 +269,7 @@ func TestCreateUser_500_DBError(t *testing.T) {
 // =============================================================================
 
 func TestGetProfile_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/test-id", nil)
@@ -282,7 +289,7 @@ func TestGetProfile_200(t *testing.T) {
 }
 
 func TestGetProfile_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/unknown", nil)
@@ -295,7 +302,7 @@ func TestGetProfile_404(t *testing.T) {
 }
 
 func TestGetProfile_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/test-id", nil)
@@ -312,7 +319,7 @@ func TestGetProfile_500(t *testing.T) {
 // =============================================================================
 
 func TestUpdateProfile_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -327,7 +334,7 @@ func TestUpdateProfile_200(t *testing.T) {
 }
 
 func TestUpdateProfile_400_InvalidJSON(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("PUT", "/users/test-id", strings.NewReader("not json"))
@@ -341,7 +348,7 @@ func TestUpdateProfile_400_InvalidJSON(t *testing.T) {
 }
 
 func TestUpdateProfile_400_MissingUsername(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"username":"","status":"online"}`
@@ -356,7 +363,7 @@ func TestUpdateProfile_400_MissingUsername(t *testing.T) {
 }
 
 func TestUpdateProfile_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -371,7 +378,7 @@ func TestUpdateProfile_500(t *testing.T) {
 }
 
 func TestUpdateProfile_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, testStorage(t))
 	r := newTestRouter(h)
 
 	body := `{"username":"alice","status":"online"}`
@@ -390,7 +397,7 @@ func TestUpdateProfile_404(t *testing.T) {
 // =============================================================================
 
 func TestUpdateAvatar_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
@@ -403,7 +410,7 @@ func TestUpdateAvatar_200(t *testing.T) {
 }
 
 func TestUpdateAvatar_400_MissingField(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	// Le champ s'appelle "file" au lieu de "avatar".
@@ -417,7 +424,7 @@ func TestUpdateAvatar_400_MissingField(t *testing.T) {
 }
 
 func TestUpdateAvatar_400_InvalidMIME(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", []byte("this is plain text"), "avatar")
@@ -430,7 +437,7 @@ func TestUpdateAvatar_400_InvalidMIME(t *testing.T) {
 }
 
 func TestUpdateAvatar_404(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: repository.ErrNotFound}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "unknown", pngBytes(), "avatar")
@@ -443,7 +450,7 @@ func TestUpdateAvatar_404(t *testing.T) {
 }
 
 func TestUpdateAvatar_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := newAvatarRequest(t, "test-id", pngBytes(), "avatar")
@@ -460,7 +467,7 @@ func TestUpdateAvatar_500(t *testing.T) {
 // =============================================================================
 
 func TestListUsers_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
@@ -489,7 +496,7 @@ func TestListUsers_200(t *testing.T) {
 }
 
 func TestListUsers_WithSearch_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?search=alice&sort=-username&limit=10&offset=5", nil)
@@ -515,7 +522,7 @@ func TestListUsers_WithSearch_200(t *testing.T) {
 }
 
 func TestListUsers_Empty_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
@@ -538,7 +545,7 @@ func TestListUsers_Empty_200(t *testing.T) {
 }
 
 func TestListUsers_LimitCap_200(t *testing.T) {
-	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{profile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?limit=200", nil)
@@ -558,7 +565,7 @@ func TestListUsers_LimitCap_200(t *testing.T) {
 }
 
 func TestListUsers_InvalidLimit_400(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?limit=abc", nil)
@@ -571,7 +578,7 @@ func TestListUsers_InvalidLimit_400(t *testing.T) {
 }
 
 func TestListUsers_NegativeOffset_400(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users?offset=-1", nil)
@@ -584,7 +591,7 @@ func TestListUsers_NegativeOffset_400(t *testing.T) {
 }
 
 func TestListUsers_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{err: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users", nil)
@@ -601,7 +608,7 @@ func TestListUsers_500(t *testing.T) {
 // =============================================================================
 
 func TestCheckUsername_Available(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/check-username?username=new_user", nil)
@@ -621,7 +628,7 @@ func TestCheckUsername_Available(t *testing.T) {
 }
 
 func TestCheckUsername_Taken(t *testing.T) {
-	h := NewUserHandler(&mockRepo{usernameProfile: sampleProfile()}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{usernameProfile: sampleProfile()}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/check-username?username=alice", nil)
@@ -641,7 +648,7 @@ func TestCheckUsername_Taken(t *testing.T) {
 }
 
 func TestCheckUsername_MissingParam(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/check-username", nil)
@@ -654,7 +661,7 @@ func TestCheckUsername_MissingParam(t *testing.T) {
 }
 
 func TestCheckUsername_InvalidFormat(t *testing.T) {
-	h := NewUserHandler(&mockRepo{}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/check-username?username=ab", nil)
@@ -667,7 +674,7 @@ func TestCheckUsername_InvalidFormat(t *testing.T) {
 }
 
 func TestCheckUsername_500(t *testing.T) {
-	h := NewUserHandler(&mockRepo{usernameErr: errors.New("db error")}, t.TempDir(), "http://localhost:8083")
+	h := NewUserHandler(&mockRepo{usernameErr: errors.New("db error")}, testStorage(t))
 	r := newTestRouter(h)
 
 	req := httptest.NewRequest("GET", "/users/check-username?username=some_user", nil)
