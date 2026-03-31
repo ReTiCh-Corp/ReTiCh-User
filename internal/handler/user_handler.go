@@ -5,14 +5,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/retich-corp/user/internal/model"
 	"github.com/retich-corp/user/internal/repository"
+	"github.com/retich-corp/user/internal/storage"
 )
 
 var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{3,30}$`)
@@ -54,18 +53,14 @@ type listUsersResponse struct {
 }
 
 // UserHandler regroupe tous les handlers HTTP liés aux utilisateurs.
-// uploadsDir : chemin du dossier où sont stockés les avatars sur disque.
-// baseURL    : URL publique de base pour construire les liens vers les avatars.
 type UserHandler struct {
-	repo       userRepository
-	uploadsDir string
-	baseURL    string
+	repo    userRepository
+	storage storage.AvatarStorage
 }
 
 // NewUserHandler crée un UserHandler avec les dépendances nécessaires.
-// *repository.UserRepository satisfait userRepository implicitement (duck typing Go).
-func NewUserHandler(repo userRepository, uploadsDir, baseURL string) *UserHandler {
-	return &UserHandler{repo: repo, uploadsDir: uploadsDir, baseURL: baseURL}
+func NewUserHandler(repo userRepository, avatarStorage storage.AvatarStorage) *UserHandler {
+	return &UserHandler{repo: repo, storage: avatarStorage}
 }
 
 // writeJSON factorise l'écriture d'une réponse JSON pour éviter la répétition
@@ -128,19 +123,16 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 // UpdateAvatar gère PATCH /users/{id}/avatar.
 // Attend un formulaire multipart avec un champ "avatar" contenant le fichier image.
-// Le fichier est sauvegardé sous {uploadsDir}/{id}.{ext}, écrasant l'ancien avatar.
-// Répond 200 + profil complet mis à jour, ou 400 / 404 / 500 selon le cas.
+// Utilise AvatarStorage pour sauvegarder (local en dev, Azure Blob en prod).
 func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
-	// Limite le body à maxUploadSize pour rejeter les gros fichiers avant même de les lire.
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file too large (max 5MB)"})
 		return
 	}
 
-	// Récupère le fichier depuis le champ "avatar" du formulaire multipart.
 	file, _, err := r.FormFile("avatar")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "field 'avatar' is required"})
@@ -148,9 +140,7 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Détecte le type MIME réel depuis les premiers octets du fichier.
-	// On ne fait pas confiance au Content-Type envoyé par le client : n'importe qui
-	// pourrait envoyer un exécutable en prétendant que c'est une image.
+	// Detect MIME type from file content (not client header)
 	buf := make([]byte, 512)
 	n, err := file.Read(buf)
 	if err != nil {
@@ -164,31 +154,18 @@ func (h *UserHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remet le curseur au début du fichier pour pouvoir le lire en intégralité ensuite.
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	// Nomme le fichier avec l'ID utilisateur : {id}.{ext}.
-	// Cela garantit qu'un second upload remplace automatiquement l'ancien avatar
-	// sans laisser de fichiers orphelins sur le disque.
-	filename := id + ext
-	dst, err := os.Create(filepath.Join(h.uploadsDir, filename))
+	// Upload via storage backend (local or Azure)
+	avatarURL, err := h.storage.Upload(r.Context(), id, ext, file)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
-	defer dst.Close()
 
-	// Copie le fichier depuis la mémoire vers le disque.
-	if _, err = io.Copy(dst, file); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-		return
-	}
-
-	// Construit l'URL publique de l'avatar et met à jour la base de données.
-	avatarURL := h.baseURL + "/uploads/" + filename
 	profile, err := h.repo.UpdateAvatarURL(id, avatarURL)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
