@@ -95,6 +95,10 @@ func (m *mockRepo) GetByEmail(_ string) (*model.User, error) {
 	return nil, repository.ErrNotFound
 }
 
+func (m *mockRepo) CompleteOnboarding(_ string) error {
+	return m.err
+}
+
 // sampleProfile retourne un profil de test réutilisable.
 func sampleProfile() *model.Profile {
 	name := "Alice Dupont"
